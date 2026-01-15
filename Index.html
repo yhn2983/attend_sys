@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>員工考勤系統</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- DataTables CSS -->
+    <link href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .card { border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: none; }
+        .clock-display { font-size: 3rem; font-weight: bold; color: #0d6efd; text-align: center; margin: 20px 0; }
+        .btn-checkin { width: 100%; padding: 15px; font-size: 1.2rem; }
+        .btn-checkout { width: 100%; padding: 15px; font-size: 1.2rem; }
+    </style>
+</head>
+<body>
+    <div class="container py-4">
+        <!-- 登入頁面 -->
+        <div id="login-view" class="row justify-content-center pt-5">
+            <div class="col-md-4">
+                <div class="card p-4">
+                    <h3 class="text-center mb-4">員工登入</h3>
+                    <form id="loginForm">
+                        <div class="mb-3">
+                            <label class="form-label">員工編號</label>
+                            <input type="text" id="loginId" class="form-control" placeholder="例如: E001" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">密碼</label>
+                            <input type="password" id="loginPwd" class="form-control" placeholder="請輸入密碼" required>
+                        </div>
+                        <button type="button" class="btn btn-primary w-100" onclick="handleLogin()">登入</button>
+                    </form>
+                    <div id="loginMsg" class="mt-3 text-center text-danger small"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主頁面 (打卡) -->
+        <div id="main-view" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2 class="m-0"><i class="bi bi-calendar-check"></i> 員工考勤系統</h2>
+                <div>
+                    <span id="welcome-msg" class="me-3 fw-bold"></span>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="handleLogout()">登出</button>
+                </div>
+            </div>
+            
+            <div class="row g-4">
+                <!-- 打卡區塊 -->
+                <div class="col-md-4">
+                    <div class="card h-100">
+                        <div class="card-header bg-primary text-white text-center">
+                            <h4 class="m-0">打卡作業</h4>
+                        </div>
+                        <div class="card-body">
+                            <div class="clock-display" id="clock">00:00:00</div>
+                            <div class="mb-3 text-center text-muted" id="date-display">YYYY/MM/DD</div>
+                            
+                            <form id="punchForm">
+                                <div class="mb-3">
+                                    <label for="note" class="form-label">備註 (選填)</label>
+                                    <input type="text" class="form-control" id="note" placeholder="例如：外出洽公 / 提早離開">
+                                </div>
+                                
+                                <div class="d-grid gap-2">
+                                    <button type="button" class="btn btn-success btn-checkin" onclick="submitPunch('checkin')">
+                                        上班簽到
+                                    </button>
+                                    <button type="button" class="btn btn-danger btn-checkout" onclick="submitPunch('checkout')">
+                                        下班簽退
+                                    </button>
+                                </div>
+                            </form>
+                            <div id="statusMsg" class="mt-3 text-center fw-bold"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 紀錄查詢區塊 -->
+                <div class="col-md-8">
+                    <div class="card h-100">
+                        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                            <h4 class="m-0">歷史紀錄</h4>
+                            <button class="btn btn-light btn-sm" onclick="exportPDF()">
+                                匯出 PDF
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive" id="table-container">
+                                <table class="table table-striped table-hover w-100" id="attendanceTable">
+                                    <thead>
+                                        <tr>
+                                            <th>編號</th>
+                                            <th>姓名</th>
+                                            <th>日期</th>
+                                            <th>簽到時間</th>
+                                            <th>簽退時間</th>
+                                            <th>備註</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <!-- 資料由 JS 載入 -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
+    <!-- HTML2PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <script>
+        var table;
+        var currentUser = null;
+
+        $(document).ready(function() {
+            updateClock();
+            setInterval(updateClock, 1000);
+            
+            // 檢查 Session (如果有需要的話，這裡簡單處理)
+            const savedUser = localStorage.getItem('gas_attendance_user');
+            if (savedUser) {
+                onLoginSuccess(JSON.parse(savedUser));
+            }
+        });
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toLocaleTimeString('zh-TW', { hour12: false });
+            document.getElementById('date-display').innerText = now.toLocaleDateString('zh-TW');
+        }
+
+        // 登入處理
+        function handleLogin() {
+            const id = $('#loginId').val().trim();
+            const pwd = $('#loginPwd').val().trim();
+            
+            if (!id || !pwd) {
+                $('#loginMsg').text('請輸入編號與密碼');
+                return;
+            }
+
+            $('#loginMsg').text('驗證中...').removeClass('text-danger').addClass('text-muted');
+            
+            google.script.run
+                .withSuccessHandler(function(res) {
+                    if (res.status === 'success') {
+                        const user = { id: id, name: res.name };
+                        localStorage.setItem('gas_attendance_user', JSON.stringify(user));
+                        onLoginSuccess(user);
+                    } else {
+                        $('#loginMsg').text(res.message).removeClass('text-muted').addClass('text-danger');
+                    }
+                })
+                .withFailureHandler(function(err) {
+                    $('#loginMsg').text('系統連線錯誤: ' + err).removeClass('text-muted').addClass('text-danger');
+                })
+                .checkLogin(id, pwd);
+        }
+
+        function onLoginSuccess(user) {
+            currentUser = user;
+            $('#login-view').hide();
+            $('#main-view').fadeIn();
+            $('#welcome-msg').text(`歡迎，${user.name} (${user.id})`);
+            loadTableData();
+        }
+
+        function handleLogout() {
+            localStorage.removeItem('gas_attendance_user');
+            currentUser = null;
+            $('#main-view').hide();
+            $('#login-view').fadeIn();
+            $('#loginId, #loginPwd').val('');
+            $('#loginMsg').text('');
+        }
+
+        // 載入表格資料 (含重試機制)
+        var retryCount = 0;
+        var maxRetries = 3;
+        var isLoadingTable = false;
+
+        function loadTableData(silent = false) {
+            if (isLoadingTable) return;
+            isLoadingTable = true;
+
+            if (!currentUser) return; // 未登入不讀取
+
+            if (!silent && retryCount === 0) {
+                 $('#table-container').html('<div class="text-center py-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div><div class="mt-2 text-muted">正在讀取紀錄...</div></div>');
+            }
+            
+            google.script.run
+                .withSuccessHandler(function(data) {
+                    isLoadingTable = false;
+                    retryCount = 0;
+                    renderTable(data);
+                })
+                .withFailureHandler(function(err) {
+                    isLoadingTable = false;
+                    if (retryCount < maxRetries) {
+                        retryCount++;
+                        setTimeout(function() { loadTableData(silent); }, 1000 * retryCount);
+                    } else {
+                        if (!silent) {
+                            $('#table-container').html('<div class="alert alert-danger text-center">無法讀取資料，請重新整理網頁再試。</div>');
+                        }
+                    }
+                })
+                .getAttendanceData(currentUser.id);
+        }
+
+        // 本地立即更新表格 (Optimistic Update)
+        function updateTableLocal(res) {
+            if (!res.data) return;
+            var newData = res.data;
+            // 欄位順序：[編號, 姓名, 日期, 簽到, 簽退, 備註]
+            var rowData = [newData.id, newData.name, newData.date, newData.inTime, newData.outTime, newData.note];
+
+            if (res.action === 'checkin') {
+                table.row.add(rowData).draw(false);
+                table.order([[2, 'desc'], [3, 'desc']]).draw(false); // 日期與簽到倒序
+            } else if (res.action === 'checkout') {
+                table.rows().every(function (rowIdx, tableLoop, rowLoop) {
+                    var d = this.data();
+                    // 比對 ID 與 日期 (d[0] 是 ID, d[2] 是日期)
+                    if (d[0] === newData.id && d[2] === newData.date) {
+                        this.data(rowData).draw(false);
+                        return false;
+                    }
+                });
+            }
+        }
+
+        function renderTable(dataArray) {
+            $('#table-container').html('<table class="table table-striped table-hover w-100" id="attendanceTable"><thead><tr><th>編號</th><th>姓名</th><th>日期</th><th>簽到時間</th><th>簽退時間</th><th>備註</th></tr></thead><tbody></tbody></table>');
+
+            if ($.fn.DataTable.isDataTable('#attendanceTable')) {
+                table.destroy();
+            }
+            
+            table = $('#attendanceTable').DataTable({
+                data: dataArray,
+                columns: [
+                    { title: "編號" },
+                    { title: "姓名" },
+                    { title: "日期" },
+                    { title: "簽到時間" },
+                    { title: "簽退時間" },
+                    { title: "備註" }
+                ],
+                order: [[ 2, "desc" ], [ 3, "desc" ]],
+                language: {
+                    "processing": "處理中...",
+                    "loadingRecords": "載入中...",
+                    "lengthMenu": "顯示 _MENU_ 項結果",
+                    "zeroRecords": "沒有符合的結果",
+                    "info": "顯示第 _START_ 至 _END_ 項結果，共 _TOTAL_ 項",
+                    "infoEmpty": "顯示第 0 至 0 項結果，共 0 項",
+                    "infoFiltered": "(從 _MAX_ 項結果中過濾)",
+                    "search": "搜尋:",
+                    "paginate": {
+                        "first": "第一頁",
+                        "previous": "上一頁",
+                        "next": "下一頁",
+                        "last": "最後一頁"
+                    }
+                }
+            });
+        }
+
+        // 提交打卡
+        function submitPunch(action) {
+            const note = $('#note').val().trim();
+            
+            if (!currentUser) {
+                alert('請先登入！');
+                handleLogout();
+                return;
+            }
+
+            $('.btn-checkin, .btn-checkout').prop('disabled', true);
+            $('#statusMsg').text('處理中...').removeClass('text-success text-danger');
+
+            const payload = {
+                id: currentUser.id,
+                action: action,
+                note: note
+            };
+
+            google.script.run
+                .withSuccessHandler(function(response) {
+                    $('.btn-checkin, .btn-checkout').prop('disabled', false);
+                    
+                    if (response.status === 'success') {
+                        $('#statusMsg').text(response.message).addClass('text-success');
+                        $('#note').val('');
+                        updateTableLocal(response);
+                        setTimeout(function() { loadTableData(true); }, 500); 
+                    } else {
+                        $('#statusMsg').text(response.message).addClass('text-danger');
+                    }
+                })
+                .withFailureHandler(function(err) {
+                    $('.btn-checkin, .btn-checkout').prop('disabled', false);
+                    $('#statusMsg').text('連線錯誤: ' + err).addClass('text-danger');
+                })
+                .processPunch(payload);
+        }
+
+        // 匯出 PDF
+        function exportPDF() {
+            if (typeof html2pdf === 'undefined') {
+                alert("系統錯誤：無法載入 PDF 生成組件。");
+                return;
+            }
+
+            const btn = event ? (event.target.tagName === 'BUTTON' ? event.target : event.target.closest('button')) : null;
+            const originalText = btn ? btn.innerText : '匯出 PDF';
+            if (btn) btn.innerText = '產生中...';
+
+            var userName = (currentUser && currentUser.name) ? currentUser.name : '全體';
+            var fileName = '考勤紀錄_' + userName + '.pdf';
+            var element = document.getElementById('table-container');
+
+            var opt = {
+                margin:       0.5,
+                filename:     fileName,
+                image:        { type: 'jpeg', quality: 0.98 },
+                html2canvas:  { 
+                    scale: 2, 
+                    useCORS: true,
+                    allowTaint: true,
+                    // 極致清理：移除所有可能導致報錯的圖片與背景
+                    onclone: function(clonedDoc) {
+                        const allElements = clonedDoc.querySelectorAll('*');
+                        allElements.forEach(el => {
+                            // 1. 強制移除所有背景圖 (DataTables 的標題圖示最常報錯)
+                            el.style.backgroundImage = 'none';
+                            el.style.background = 'none';
+                        });
+                        
+                        // 2. 移除所有 <img> 與 <svg> (這些在考勤表通常不是必需的)
+                        const images = clonedDoc.querySelectorAll('img, svg, i');
+                        images.forEach(img => img.remove());
+                        
+                        // 3. 針對 DataTables 的特定清理
+                        const tableHeaders = clonedDoc.querySelectorAll('th');
+                        tableHeaders.forEach(th => {
+                            th.style.paddingRight = '8px'; // 恢復被圖示佔據的空間
+                            th.className = ''; // 移除所有 sorting 相關的 class
+                        });
+                    }
+                },
+                jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
+            };
+
+            html2pdf().set(opt).from(element).save()
+                .then(() => {
+                    if (btn) btn.innerText = originalText;
+                })
+                .catch(err => {
+                    console.error("PDF 匯出失敗:", err);
+                    alert("匯出失敗 (原因: " + err.message + ")。提示：若持續失敗，請嘗試登出再重新登入。");
+                    if (btn) btn.innerText = originalText;
+                });
+        }
+    </script>
+</body>
+</html>
